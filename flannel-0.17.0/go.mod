@@ -44,6 +44,7 @@ require (
 	k8s.io/apimachinery v0.20.6
 	k8s.io/client-go v0.20.6
 	k8s.io/klog v1.0.0
+	go.etcd.io/etcd/client/v3 v3.5.2
 
 )
 
