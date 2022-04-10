@@ -17,6 +17,8 @@ package etcd3
 import (
 	"errors"
 	"fmt"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	"google.golang.org/grpc/codes"
 	"strconv"
 	"time"
 
@@ -46,8 +48,8 @@ func isErrEtcdNodeExist(e error) bool {
 	if e == nil {
 		return false
 	}
-	etcdErr, ok := e.(etcd.Error)
-	return ok || etcdErr.Code == etcd.ErrorCodeNodeExist
+	etcdErr, ok := e.(rpctypes.EtcdError)
+	return ok || etcdErr.Code() == codes.NotFound
 }
 
 func (c watchCursor) String() string {

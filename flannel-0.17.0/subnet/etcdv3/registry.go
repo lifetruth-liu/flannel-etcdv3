@@ -16,6 +16,7 @@ package etcd3
 
 import (
 	"encoding/json"
+	"fmt"
 	_ "fmt"
 	"github.com/flannel-io/flannel/pkg/ip"
 	. "github.com/flannel-io/flannel/subnet"
@@ -27,6 +28,7 @@ import (
 	"path"
 	_ "path"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -120,7 +122,7 @@ func (esr *etcdSubnetRegistry) getSubnets(ctx context.Context) ([]Lease, uint64,
 
 	leases := []Lease{}
 	for _, node := range resp.Kvs {
-		l, err := nodeToLease(node)
+		l, err := esr.nodeToLease(ctx, node)
 		if err != nil {
 			log.Warningf("Ignoring bad subnet node: %v", err)
 			continue
@@ -141,7 +143,7 @@ func (esr *etcdSubnetRegistry) getSubnet(ctx context.Context, sn ip.IP4Net, sn6 
 	if len(resp.Kvs) == 0 {
 		return nil, 0, ErrKeyNotFound
 	}
-	l, err := nodeToLease(resp.Kvs[0])
+	l, err := esr.nodeToLease(ctx, resp.Kvs[0])
 	return l, uint64(resp.Header.Revision), err
 }
 
@@ -175,156 +177,161 @@ func (esr *etcdSubnetRegistry) createSubnet(ctx context.Context, sn ip.IP4Net, s
 }
 
 func (esr *etcdSubnetRegistry) updateSubnet(ctx context.Context, sn ip.IP4Net, sn6 ip.IP6Net, attrs *LeaseAttrs, ttl time.Duration, asof uint64) (time.Time, error) {
-	return time.Time{}, nil
-	//key := path.Join(esr.etcdCfg.Prefix, "subnets", MakeSubnetKey(sn, sn6))
-	//value, err := json.Marshal(attrs)
-	//if err != nil {
-	//	return time.Time{}, err
-	//}
-	//resp, err := esr.client().Set(ctx, key, string(value), &etcd.SetOptions{
-	//	PrevIndex: asof,
-	//	TTL:       ttl,
-	//})
-	//if err != nil {
-	//	return time.Time{}, err
-	//}
-	//
-	//exp := time.Time{}
-	//if resp.Node.Expiration != nil {
-	//	exp = *resp.Node.Expiration
-	//}
-	//
-	//return exp, nil
+	key := path.Join(esr.etcdCfg.Prefix, "subnets", MakeSubnetKey(sn, sn6))
+	value, err := json.Marshal(attrs)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	lease := etcd.NewLease(esr.cli)
+	leasResp, err := lease.Grant(ctx, int64(ttl.Seconds()))
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	if asof == 0 {
+		if _, err := esr.client().Put(ctx, key, string(value), etcd.WithLease(leasResp.ID)); err != nil {
+			return time.Time{}, err
+		}
+		return time.Now().Add(ttl), nil
+	} else {
+		// TODO
+		return time.Time{}, err
+	}
 }
 
 func (esr *etcdSubnetRegistry) deleteSubnet(ctx context.Context, sn ip.IP4Net, sn6 ip.IP6Net) error {
-	return nil
-	//key := path.Join(esr.etcdCfg.Prefix, "subnets", MakeSubnetKey(sn, sn6))
-	//_, err := esr.client().Delete(ctx, key, nil)
-	//return err
+	key := path.Join(esr.etcdCfg.Prefix, "subnets", MakeSubnetKey(sn, sn6))
+	_, err := esr.client().Delete(ctx, key, nil)
+	return err
 }
 
 func (esr *etcdSubnetRegistry) watchSubnets(ctx context.Context, since uint64) (Event, uint64, error) {
-	return Event{}, 0, nil
-	//key := path.Join(esr.etcdCfg.Prefix, "subnets")
-	//opts := &etcd.WatcherOptions{
-	//	AfterIndex: since,
-	//	Recursive:  true,
-	//}
-	//e, err := esr.client().Watcher(key, opts).Next(ctx)
-	//if err != nil {
-	//	return Event{}, 0, err
-	//}
-	//
-	//evt, err := parseSubnetWatchResponse(e)
-	//return evt, e.Node.ModifiedIndex, err
+	key := path.Join(esr.etcdCfg.Prefix, "subnets")
+	e, isOk := <-esr.client().Watch(ctx, key, etcd.WithRev(int64(since)))
+	if !isOk {
+		return Event{}, 0, errors.New("channel has closed.")
+	}
+
+	evt, err := esr.parseSubnetWatchResponse(ctx, e)
+	return evt, uint64(e.Events[0].Kv.ModRevision), err
 }
 
 func (esr *etcdSubnetRegistry) watchSubnet(ctx context.Context, since uint64, sn ip.IP4Net, sn6 ip.IP6Net) (Event, uint64, error) {
-	return Event{}, 0, nil
-	//key := path.Join(esr.etcdCfg.Prefix, "subnets", MakeSubnetKey(sn, sn6))
-	//opts := &etcd.WatcherOptions{
-	//	AfterIndex: since,
-	//}
-	//
-	//e, err := esr.client().Watcher(key, opts).Next(ctx)
-	//if err != nil {
-	//	return Event{}, 0, err
-	//}
-	//
-	//evt, err := parseSubnetWatchResponse(e)
-	//return evt, e.Node.ModifiedIndex, err
+	key := path.Join(esr.etcdCfg.Prefix, "subnets", MakeSubnetKey(sn, sn6))
+
+	e, isOk := <-esr.client().Watch(ctx, key, etcd.WithRev(int64(since)))
+	if !isOk {
+		return Event{}, 0, errors.New("channel has closed.")
+	}
+
+	evt, err := esr.parseSubnetWatchResponse(ctx, e)
+	return evt, uint64(e.Events[0].Kv.ModRevision), err
 }
 
 func (esr *etcdSubnetRegistry) client() *etcd.Client {
-	return nil
 	//esr.mux.Lock()
 	//defer esr.mux.Unlock()
-	//return esr.cli
+	return esr.cli
 }
 
-func parseSubnetWatchResponse(resp *etcd.GetResponse) (Event, error) {
-	return Event{}, nil
-	//sn, tsn6 := ParseSubnetKey(resp.Node.Key)
-	//if sn == nil {
-	//	return Event{}, fmt.Errorf("%v %q: not a subnet, skipping", resp.Action, resp.Node.Key)
-	//}
-	//
-	//var sn6 ip.IP6Net
-	//if tsn6 != nil {
-	//	sn6 = *tsn6
-	//}
-	//
-	//switch resp.Action {
-	//case "delete", "expire":
-	//	return Event{
-	//		Type: EventRemoved,
-	//		Lease: Lease{
-	//			EnableIPv4: true,
-	//			Subnet:     *sn,
-	//			EnableIPv6: !sn6.Empty(),
-	//			IPv6Subnet: sn6,
-	//		},
-	//	}, nil
-	//
-	//default:
-	//	attrs := &LeaseAttrs{}
-	//	err := json.Unmarshal([]byte(resp.Node.Value), attrs)
-	//	if err != nil {
-	//		return Event{}, err
-	//	}
-	//
-	//	exp := time.Time{}
-	//	if resp.Node.Expiration != nil {
-	//		exp = *resp.Node.Expiration
-	//	}
-	//
-	//	evt := Event{
-	//		Type: EventAdded,
-	//		Lease: Lease{
-	//			EnableIPv4: true,
-	//			Subnet:     *sn,
-	//			EnableIPv6: !sn6.Empty(),
-	//			IPv6Subnet: sn6,
-	//			Attrs:      *attrs,
-	//			Expiration: exp,
-	//		},
-	//	}
-	//	return evt, nil
-	//}
+func (esr *etcdSubnetRegistry) parseSubnetWatchResponse(ctx context.Context, resp etcd.WatchResponse) (Event, error) {
+	if len(resp.Events) != 1 {
+		return Event{}, errors.New("Unexcept events[1] got [" + strconv.Itoa(len(resp.Events)) + "]")
+	}
+	event := resp.Events[0]
+	sn, tsn6 := ParseSubnetKey(string(event.Kv.Key))
+	if sn == nil {
+		return Event{}, fmt.Errorf("%v %q: not a subnet, skipping",
+			event.Type.String(), string(event.Kv.Key))
+	}
+
+	var sn6 ip.IP6Net
+	if tsn6 != nil {
+		sn6 = *tsn6
+	}
+
+	switch event.Type {
+	case mvccpb.DELETE:
+		return Event{
+			Type: EventRemoved,
+			Lease: Lease{
+				EnableIPv4: true,
+				Subnet:     *sn,
+				EnableIPv6: !sn6.Empty(),
+				IPv6Subnet: sn6,
+			},
+		}, nil
+
+	default:
+		attrs := &LeaseAttrs{}
+		err := json.Unmarshal(event.Kv.Value, attrs)
+		if err != nil {
+			return Event{}, err
+		}
+
+		exp, err := esr.lease2LiveTime(ctx, etcd.LeaseID(event.Kv.Lease))
+		if err != nil {
+			return Event{}, err
+		}
+
+		evt := Event{
+			Type: EventAdded,
+			Lease: Lease{
+				EnableIPv4: true,
+				Subnet:     *sn,
+				EnableIPv6: !sn6.Empty(),
+				IPv6Subnet: sn6,
+				Attrs:      *attrs,
+				Expiration: exp,
+			},
+		}
+		return evt, nil
+	}
 }
 
-func nodeToLease(node *mvccpb.KeyValue) (*Lease, error) {
-	return nil, nil
-	//sn, tsn6 := ParseSubnetKey(node.Key)
-	//if sn == nil {
-	//	return nil, fmt.Errorf("failed to parse subnet key %s", node.Key)
-	//}
-	//
-	//var sn6 ip.IP6Net
-	//if tsn6 != nil {
-	//	sn6 = *tsn6
-	//}
-	//
-	//attrs := &LeaseAttrs{}
-	//if err := json.Unmarshal([]byte(node.Value), attrs); err != nil {
-	//	return nil, err
-	//}
-	//
-	//exp := time.Time{}
-	//if node.Expiration != nil {
-	//	exp = *node.Expiration
-	//}
-	//
-	//lease := Lease{
-	//	EnableIPv4: true,
-	//	EnableIPv6: !sn6.Empty(),
-	//	Subnet:     *sn,
-	//	IPv6Subnet: sn6,
-	//	Attrs:      *attrs,
-	//	Expiration: exp,
-	//	Asof:       node.ModifiedIndex,
-	//}
-	//
-	//return &lease, nil
+func (esr *etcdSubnetRegistry) nodeToLease(ctx context.Context, node *mvccpb.KeyValue) (*Lease, error) {
+	var err error
+
+	sn, tsn6 := ParseSubnetKey(string(node.Key))
+	if sn == nil {
+		return nil, fmt.Errorf("failed to parse subnet key %s", node.Key)
+	}
+
+	var sn6 ip.IP6Net
+	if tsn6 != nil {
+		sn6 = *tsn6
+	}
+
+	attrs := &LeaseAttrs{}
+	if err := json.Unmarshal(node.Value, attrs); err != nil {
+		return nil, err
+	}
+	exp, err := esr.lease2LiveTime(ctx, etcd.LeaseID(node.Lease))
+	if err != nil {
+		return nil, err
+	}
+
+	lease := Lease{
+		EnableIPv4: true,
+		EnableIPv6: !sn6.Empty(),
+		Subnet:     *sn,
+		IPv6Subnet: sn6,
+		Attrs:      *attrs,
+		Expiration: exp,
+		Asof:       uint64(node.ModRevision),
+	}
+
+	return &lease, nil
+}
+
+func (esr *etcdSubnetRegistry) lease2LiveTime(ctx context.Context, leaseId etcd.LeaseID) (time.Time, error) {
+	if leaseId == 0 {
+		return time.Time{}, nil
+	}
+	l, err := esr.client().Lease.TimeToLive(ctx, leaseId)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Now().Add(time.Second * time.Duration(l.TTL)), nil
 }
