@@ -208,6 +208,10 @@ func (esr *etcdSubnetRegistry) deleteSubnet(ctx context.Context, sn ip.IP4Net, s
 
 func (esr *etcdSubnetRegistry) watchSubnets(ctx context.Context, since uint64) (Event, uint64, error) {
 	key := path.Join(esr.etcdCfg.Prefix, "subnets")
+	if since != 0 {
+		since = since + 1
+	}
+
 	e, isOk := <-esr.client().Watch(ctx, key, etcd.WithRev(int64(since)))
 	if !isOk {
 		return Event{}, 0, errors.New("channel has closed.")
@@ -219,6 +223,10 @@ func (esr *etcdSubnetRegistry) watchSubnets(ctx context.Context, since uint64) (
 
 func (esr *etcdSubnetRegistry) watchSubnet(ctx context.Context, since uint64, sn ip.IP4Net, sn6 ip.IP6Net) (Event, uint64, error) {
 	key := path.Join(esr.etcdCfg.Prefix, "subnets", MakeSubnetKey(sn, sn6))
+
+	if since != 0 {
+		since = since + 1
+	}
 
 	e, isOk := <-esr.client().Watch(ctx, key, etcd.WithRev(int64(since)))
 	if !isOk {
