@@ -217,6 +217,10 @@ func (esr *etcdSubnetRegistry) watchSubnets(ctx context.Context, since uint64) (
 		return Event{}, 0, errors.New("channel has closed.")
 	}
 
+	if e.Err() != nil {
+		return Event{}, 0, e.Err()
+	}
+
 	evt, err := esr.parseSubnetWatchResponse(ctx, e)
 	return evt, uint64(e.Events[0].Kv.ModRevision), err
 }
@@ -231,6 +235,9 @@ func (esr *etcdSubnetRegistry) watchSubnet(ctx context.Context, since uint64, sn
 	e, isOk := <-esr.client().Watch(ctx, key, etcd.WithRev(int64(since)))
 	if !isOk {
 		return Event{}, 0, errors.New("channel has closed.")
+	}
+	if e.Err() != nil {
+		return Event{}, 0, e.Err()
 	}
 
 	evt, err := esr.parseSubnetWatchResponse(ctx, e)
