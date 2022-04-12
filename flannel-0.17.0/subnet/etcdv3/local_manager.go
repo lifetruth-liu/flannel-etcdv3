@@ -12,19 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package etcd3
+package etcdv3
 
 import (
 	"errors"
 	"fmt"
-	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"google.golang.org/grpc/codes"
 	"strconv"
 	"time"
 
 	"github.com/flannel-io/flannel/pkg/ip"
 	. "github.com/flannel-io/flannel/subnet"
-	etcd "go.etcd.io/etcd/client"
 	"golang.org/x/net/context"
 	log "k8s.io/klog"
 )
@@ -48,8 +46,8 @@ func isErrEtcdNodeExist(e error) bool {
 	if e == nil {
 		return false
 	}
-	etcdErr, ok := e.(rpctypes.EtcdError)
-	return ok || etcdErr.Code() == codes.NotFound
+	etcdErr, ok := e.(EtcdError)
+	return ok || etcdErr.Code() == codes.AlreadyExists
 }
 
 func (c watchCursor) String() string {
@@ -379,8 +377,8 @@ func (m *LocalManager) WatchLeases(ctx context.Context, cursor interface{}) (Lea
 }
 
 func isIndexTooSmall(err error) bool {
-	etcdErr, ok := err.(etcd.Error)
-	return ok && etcdErr.Code == etcd.ErrorCodeEventIndexCleared
+	etcdErr, ok := err.(EtcdError)
+	return ok && etcdErr.Code() == codes.OutOfRange
 }
 
 // leasesWatchReset is called when incremental lease watch failed and we need to grab a snapshot

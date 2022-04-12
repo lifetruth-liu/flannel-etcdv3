@@ -1,17 +1,24 @@
-package etcd3
+package etcdv3
 
 import (
-	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 var (
-	keyNotFound      = status.New(codes.NotFound, "etcdserver: key is not found").Err()
-	keyAlreadyExists = status.New(codes.AlreadyExists, "etcdserver: key is already exists").Err()
+	ErrKeyNotFound           = EtcdError{code: codes.NotFound, desc: "etcdserver: key is not found"}
+	ErrKeyAlreadyExists      = EtcdError{code: codes.AlreadyExists, desc: "etcdserver: key is already exists"}
+	ErrCodeEventIndexCleared = EtcdError{code: codes.OutOfRange, desc: "etcdserver: index to small"}
 )
 
-var (
-	ErrKeyNotFound      = rpctypes.Error(keyNotFound)
-	ErrKeyAlreadyExists = rpctypes.Error(keyAlreadyExists)
-)
+type EtcdError struct {
+	code codes.Code
+	desc string
+}
+
+func (e EtcdError) Code() codes.Code {
+	return e.code
+}
+
+func (e EtcdError) Error() string {
+	return e.desc
+}

@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package etcd3
+package etcdv3
 
 import (
 	"encoding/json"
 	"fmt"
-	_ "fmt"
 	"github.com/flannel-io/flannel/pkg/ip"
 	. "github.com/flannel-io/flannel/subnet"
 	"github.com/pkg/errors"
@@ -26,7 +25,6 @@ import (
 	"golang.org/x/net/context"
 	log "k8s.io/klog"
 	"path"
-	_ "path"
 	"regexp"
 	"strconv"
 	"sync"
@@ -50,9 +48,6 @@ type Registry interface {
 
 type EtcdConfig struct {
 	Endpoints []string
-	Keyfile   string
-	Certfile  string
-	CAFile    string
 	Prefix    string
 	Username  string
 	Password  string
@@ -208,40 +203,48 @@ func (esr *etcdSubnetRegistry) deleteSubnet(ctx context.Context, sn ip.IP4Net, s
 
 func (esr *etcdSubnetRegistry) watchSubnets(ctx context.Context, since uint64) (Event, uint64, error) {
 	key := path.Join(esr.etcdCfg.Prefix, "subnets")
-	if since != 0 {
-		since = since + 1
+
+	e, err := esr.watch(ctx, key, since)
+	if err != nil {
+		return Event{}, 0, err
 	}
 
-	e, isOk := <-esr.client().Watch(ctx, key, etcd.WithRev(int64(since)))
-	if !isOk {
-		return Event{}, 0, errors.New("channel has closed.")
-	}
-
-	if e.Err() != nil {
-		return Event{}, 0, e.Err()
-	}
-
-	evt, err := esr.parseSubnetWatchResponse(ctx, e)
+	evt, err := esr.parseSubnetWatchResponse(ctx, *e)
 	return evt, uint64(e.Events[0].Kv.ModRevision), err
 }
 
 func (esr *etcdSubnetRegistry) watchSubnet(ctx context.Context, since uint64, sn ip.IP4Net, sn6 ip.IP6Net) (Event, uint64, error) {
 	key := path.Join(esr.etcdCfg.Prefix, "subnets", MakeSubnetKey(sn, sn6))
 
+	e, err := esr.watch(ctx, key, since)
+	if err != nil {
+		return Event{}, 0, err
+	}
+
+	evt, err := esr.parseSubnetWatchResponse(ctx, *e)
+	return evt, uint64(e.Events[0].Kv.ModRevision), err
+}
+
+func (esr *etcdSubnetRegistry) watch(ctx context.Context, key string, since uint64, otherOpts ...etcd.OpOption) (*etcd.WatchResponse, error) {
 	if since != 0 {
 		since = since + 1
 	}
-
-	e, isOk := <-esr.client().Watch(ctx, key, etcd.WithRev(int64(since)))
+	otherOpts = append(otherOpts, etcd.WithRev(int64(since)))
+	c, cancel := context.WithCancel(ctx)
+	defer cancel()
+	e, isOk := <-esr.client().Watch(c, key, otherOpts...)
 	if !isOk {
-		return Event{}, 0, errors.New("channel has closed.")
+		return nil, errors.New("channel has closed.")
 	}
 	if e.Err() != nil {
-		return Event{}, 0, e.Err()
+		return nil, e.Err()
 	}
 
-	evt, err := esr.parseSubnetWatchResponse(ctx, e)
-	return evt, uint64(e.Events[0].Kv.ModRevision), err
+	if since != 0 && e.Header.Revision-int64(since) >= 1000 {
+		return nil, ErrCodeEventIndexCleared
+	}
+
+	return &e, nil
 }
 
 func (esr *etcdSubnetRegistry) client() *etcd.Client {

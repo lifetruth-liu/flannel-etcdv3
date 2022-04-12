@@ -35,6 +35,7 @@ import (
 	"github.com/flannel-io/flannel/pkg/ipmatch"
 	"github.com/flannel-io/flannel/subnet"
 	"github.com/flannel-io/flannel/subnet/etcdv2"
+	"github.com/flannel-io/flannel/subnet/etcdv3"
 	"github.com/flannel-io/flannel/subnet/kube"
 	"github.com/flannel-io/flannel/version"
 	"golang.org/x/net/context"
@@ -78,6 +79,7 @@ type CmdLineOpts struct {
 	etcdCAFile                string
 	etcdUsername              string
 	etcdPassword              string
+	etcdVersion               string
 	version                   bool
 	kubeSubnetMgr             bool
 	kubeApiUrl                string
@@ -113,6 +115,7 @@ func init() {
 	flannelFlags.StringVar(&opts.etcdCAFile, "etcd-cafile", "", "SSL Certificate Authority file used to secure etcd communication")
 	flannelFlags.StringVar(&opts.etcdUsername, "etcd-username", "", "username for BasicAuth to etcd")
 	flannelFlags.StringVar(&opts.etcdPassword, "etcd-password", "", "password for BasicAuth to etcd")
+	flannelFlags.StringVar(&opts.etcdVersion, "etcd-version", "2", "etcd version default \"2\", supports: \"2\" or \"3\"")
 	flannelFlags.Var(&opts.iface, "iface", "interface to use (IP or name) for inter-host communication. Can be specified multiple times to check each option in order. Returns the first match found.")
 	flannelFlags.Var(&opts.ifaceRegex, "iface-regex", "regex expression to match the first interface to use (IP or name) for inter-host communication. Can be specified multiple times to check each regex in order. Returns the first match found. Regexes are checked after specific interfaces specified by the iface option have already been checked.")
 	flannelFlags.StringVar(&opts.subnetFile, "subnet-file", "/run/flannel/subnet.env", "filename where env variables (subnet, MTU, ... ) will be written to")
@@ -172,7 +175,21 @@ func newSubnetManager(ctx context.Context) (subnet.Manager, error) {
 	if opts.kubeSubnetMgr {
 		return kube.NewSubnetManager(ctx, opts.kubeApiUrl, opts.kubeConfigFile, opts.kubeAnnotationPrefix, opts.netConfPath, opts.setNodeNetworkUnavailable)
 	}
+	// Attempt to renew the lease for the subnet specified in the subnetFile
+	prevSubnet := ReadCIDRFromSubnetFile(opts.subnetFile, "FLANNEL_SUBNET")
+	prevIPv6Subnet := ReadIP6CIDRFromSubnetFile(opts.subnetFile, "FLANNEL_IPV6_SUBNET")
+	if opts.etcdVersion == "3" {
+		log.Info("select etcd version: ", opts.etcdVersion)
+		cfg := &etcdv3.EtcdConfig{
+			Endpoints: strings.Split(opts.etcdEndpoints, ","),
+			Prefix:    opts.etcdPrefix,
+			Username:  opts.etcdUsername,
+			Password:  opts.etcdPassword,
+		}
+		return etcdv3.NewLocalManager(cfg, prevSubnet, prevIPv6Subnet)
+	}
 
+	log.Info("select etcd version: ", "2")
 	cfg := &etcdv2.EtcdConfig{
 		Endpoints: strings.Split(opts.etcdEndpoints, ","),
 		Keyfile:   opts.etcdKeyfile,
@@ -182,11 +199,6 @@ func newSubnetManager(ctx context.Context) (subnet.Manager, error) {
 		Username:  opts.etcdUsername,
 		Password:  opts.etcdPassword,
 	}
-
-	// Attempt to renew the lease for the subnet specified in the subnetFile
-	prevSubnet := ReadCIDRFromSubnetFile(opts.subnetFile, "FLANNEL_SUBNET")
-	prevIPv6Subnet := ReadIP6CIDRFromSubnetFile(opts.subnetFile, "FLANNEL_IPV6_SUBNET")
-
 	return etcdv2.NewLocalManager(cfg, prevSubnet, prevIPv6Subnet)
 }
 
