@@ -204,7 +204,7 @@ func (esr *etcdSubnetRegistry) deleteSubnet(ctx context.Context, sn ip.IP4Net, s
 func (esr *etcdSubnetRegistry) watchSubnets(ctx context.Context, since uint64) (Event, uint64, error) {
 	key := path.Join(esr.etcdCfg.Prefix, "subnets")
 
-	e, err := esr.watch(ctx, key, since)
+	e, err := esr.watch(ctx, key, since, etcd.WithPrefix())
 	if err != nil {
 		return Event{}, 0, err
 	}
